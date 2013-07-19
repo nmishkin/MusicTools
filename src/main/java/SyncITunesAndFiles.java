@@ -80,6 +80,7 @@ public class SyncITunesAndFiles {
         {FieldKey.DISC_TOTAL, "discCount"},
         {FieldKey.GENRE, "genre"},
         {FieldKey.TITLE, "name"},
+        {FieldKey.TRACK, "trackNumber"},
     };
     
     private static class FieldDescriptor {
@@ -260,7 +261,7 @@ public class SyncITunesAndFiles {
         }
         
         // Ignore disk number/total differences
-        if ((fieldKey == FieldKey.DISC_NO || fieldKey == FieldKey.DISC_TOTAL) && iTunesValue.equals("0")) {
+        if ((fieldKey == FieldKey.DISC_NO || fieldKey == FieldKey.DISC_TOTAL || fieldKey == FieldKey.TRACK) && iTunesValue.equals("0")) {
             return false;
         }
         
