@@ -49,7 +49,6 @@ public class MusicFileSync {
         new MusicFileSync().doMain(args);
     }
     
-    
     @SuppressWarnings("unused")
     private static void showFileTagFields(Tag tag) {
         Iterator<TagField> fields = tag.getFields();
@@ -81,11 +80,13 @@ public class MusicFileSync {
         
         dstRoot = arguments.get(0);
         
+        // Collect all the files in the destination directory tree
         Map<String, Path> dstMap = new HashMap<String, Path>();
         Path dstDatPath = fs.getPath("dst.dat");
         fillMap(Side.DESTINATION, dstMap, 0, dstDatPath);
         writeMap(dstMap, dstDatPath);
         
+        // Collect all the files at the source
         Map<String, Path> srcMap = new HashMap<String, Path>();
         Path srcDatPath = fs.getPath("src.dat");
         for (int i = 1; i < arguments.size(); i++) {
@@ -93,6 +94,7 @@ public class MusicFileSync {
         }
         writeMap(srcMap, srcDatPath);
         
+        // Look through all the files in the source directory trees and see if they have equivalent at the destination
         for (Entry<String, Path> srcEntry : srcMap.entrySet()) {
             String srcKey = srcEntry.getKey();
             Path dstPath = dstMap.get(srcKey);
@@ -104,7 +106,6 @@ public class MusicFileSync {
                 updateFile(dstPath, srcPath);
                 dstMap.remove(srcKey);
             }
-            
         }
     }
 
@@ -112,7 +113,6 @@ public class MusicFileSync {
         // TODO Auto-generated method stub
         
     }
-
 
     private void copyFile(Path srcPath) {
         try {
@@ -132,6 +132,7 @@ public class MusicFileSync {
         
     }
 
+    // Turns the source path into a path relative to the source directory tree it came from.
     private Path relativize(Path srcPath) {
         for (int i = 1; i < arguments.size(); i++) {
             Path relPath = fs.getPath(arguments.get(i)).relativize(srcPath);
@@ -143,6 +144,7 @@ public class MusicFileSync {
     }
 
 
+    @SuppressWarnings("unused")
     private String makeNameFromTags(Path path) throws Exception {
         AudioFile file = AudioFileIO.read(path.toFile());
         Tag tag = file.getTag();        
@@ -190,13 +192,11 @@ public class MusicFileSync {
 
     private static class MyFileVisitor implements FileVisitor<Path> {
         private Map<String, Path> map;
-        private Path baseDir;
         private Side side;
 
         MyFileVisitor(Side side, Path baseDir, Map<String, Path> map) {
             this.side = side;
             this.map = map;
-            this.baseDir = baseDir;
         }
 
         public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
@@ -229,21 +229,18 @@ public class MusicFileSync {
                     }
                 }
                 
-                
                 AudioHeader audioHeader = file.getAudioHeader();
                 
                 double trackLength = audioHeader instanceof MP3AudioHeader ? 
                         ((MP3AudioHeader) audioHeader).getPreciseTrackLength() : audioHeader.getTrackLength();
 //                String key = String.format("%s|%s|%s|%f", tag.getFirst(FieldKey.ALBUM), tag.getFirst(FieldKey.TRACK), tag.getFirst(FieldKey.TITLE), trackLength);
                 String key = String.format("%s|%s|%f", tag.getFirst(FieldKey.ALBUM), tag.getFirst(FieldKey.TRACK), trackLength);
-//                Path relPath = baseDir.getParent().relativize(path);
                 Path prevPath = map.put(key, path);
                 if (prevPath != null) {
                     System.err.format("Duplicate for key <%s>:\n  %s\n  %s\n", key, path, prevPath); 
                 }
             } catch (Exception e) {
                 System.err.format("Error with file: %s (%s)\n", path, e.getMessage());
-//                e.printStackTrace();
             }
             return FileVisitResult.CONTINUE;
         }
@@ -251,8 +248,5 @@ public class MusicFileSync {
         public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
             return FileVisitResult.CONTINUE;
         }
-        
     }
-
-
 }
