@@ -69,7 +69,7 @@ public class SyncITunesAndFiles {
 
     }
     
-    static Object[][] FIELDS = {
+    public static Object[][] FIELDS = {
         {FieldKey.ALBUM, "album"},
         {FieldKey.ALBUM_ARTIST, "albumArtist"},
         {FieldKey.ARTIST, "artist"},

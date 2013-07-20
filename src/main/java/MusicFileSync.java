@@ -1,9 +1,10 @@
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
-import java.io.FileReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.io.UnsupportedEncodingException;
 import java.nio.file.FileSystem;
@@ -23,8 +24,6 @@ import java.util.regex.Pattern;
 
 import org.jaudiotagger.audio.AudioFile;
 import org.jaudiotagger.audio.AudioFileIO;
-import org.jaudiotagger.audio.AudioHeader;
-import org.jaudiotagger.audio.mp3.MP3AudioHeader;
 import org.jaudiotagger.tag.FieldKey;
 import org.jaudiotagger.tag.Tag;
 import org.jaudiotagger.tag.TagField;
@@ -82,60 +81,108 @@ public class MusicFileSync {
         
         // Collect all the files in the destination directory tree
         Map<String, Path> dstMap = new HashMap<String, Path>();
-        Path dstDatPath = fs.getPath("dst.dat");
-        fillMap(Side.DESTINATION, dstMap, 0, dstDatPath);
-        writeMap(dstMap, dstDatPath);
+        Path dstDatPath = FS.getPath("dst.dat");
+        
+        if (Files.exists(dstDatPath)) {
+            readMapFromFile(dstMap, dstDatPath);
+        } else {
+            fillMap(Side.DESTINATION, dstMap, 0, dstDatPath);
+            writeMapToFile(dstMap, dstDatPath);
+        }
         
         // Collect all the files at the source
         Map<String, Path> srcMap = new HashMap<String, Path>();
-        Path srcDatPath = fs.getPath("src.dat");
-        for (int i = 1; i < arguments.size(); i++) {
-            fillMap(Side.SOURCE, srcMap, i, srcDatPath);
+        Path srcDatPath = FS.getPath("src.dat");
+        
+        if (Files.exists(srcDatPath)) {
+            readMapFromFile(srcMap, srcDatPath);
+        } else {
+            for (int i = 1; i < arguments.size(); i++) {
+                fillMap(Side.SOURCE, srcMap, i, srcDatPath);
+            }
+            writeMapToFile(srcMap, srcDatPath);
         }
-        writeMap(srcMap, srcDatPath);
+        int srcMapSize = srcMap.size();
         
         // Look through all the files in the source directory trees and see if they have equivalent at the destination
+        int i = 0;
         for (Entry<String, Path> srcEntry : srcMap.entrySet()) {
+            if (++i % 100 == 0) {
+                System.out.format("====> %d of %d\n", i, srcMapSize);
+            }
+            
             String srcKey = srcEntry.getKey();
             Path dstPath = dstMap.get(srcKey);
             Path srcPath = srcEntry.getValue();
             if (dstPath == null) {
-                System.out.format("No destination entry for source entry: %s\n", srcKey);
                 copyFile(srcPath);
             } else {
                 updateFile(dstPath, srcPath);
                 dstMap.remove(srcKey);
             }
         }
+        
+        System.out.format("Unaccounted for files in destination: %d\n", dstMap.size());
+        for (Entry<String, Path> dstEntry : dstMap.entrySet()) {
+            Path value = dstEntry.getValue();
+            deleteFile(value);
+        }
     }
 
     private void updateFile(Path dstPath, Path srcPath) {
-        // TODO Auto-generated method stub
+        try {
+            AudioFile dstFile = AudioFileIO.read(dstPath.toFile());
+            Tag dstTag = dstFile.getTag();
+        
+            AudioFile srcFile = AudioFileIO.read(srcPath.toFile());
+            Tag srcTag = srcFile.getTag();
+            
+            boolean modified = false;
+            for (Object[] pair : SyncITunesAndFiles.FIELDS) {
+                FieldKey key = (FieldKey) pair[0];
+                String srcField = srcTag.getFirst(key);
+                String dstField = dstTag.getFirst(key);
+                if (srcField != null && ! srcField.equals(dstField)) {
+                    dstTag.setField(key, srcField);
+                    modified = true;
+                }
+            }
+            if (modified) {
+                System.out.format("Committing update to: %s\n", dstPath);
+                dstFile.commit();
+            }
+            
+        } catch (Exception e) {
+            System.out.format("Error updating file: %s\n", e);
+            e.printStackTrace();
+        }
+        
+        
         
     }
 
     private void copyFile(Path srcPath) {
+//      System.out.format("No destination entry for source entry: %s\n", srcKey);
         try {
-            String dstPath = String.format("%s/store/%s", dstRoot, relativize(srcPath));
+            String dstPath = String.format("%s/%s", dstRoot, relativize(srcPath)).replace(".m4a", ".mp3");
             new File(dstPath).getParentFile().mkdirs();
-            System.out.format("%s -> %s\n", srcPath, dstPath);
+            System.out.format("ffmpeg: %s -> %s\n", srcPath, dstPath);
             String[] command = {FFMPEG, "-y", "-loglevel", "quiet", "-i", srcPath.toString(), "-id3v2_version", "3", dstPath.toString()};
             Process process = Runtime.getRuntime().exec(command);
             int status = process.waitFor();
             if (status != 0) {
-                System.err.format("ffmpeg returned status %s\n", status);
+                System.out.format("ffmpeg returned status %s\n", status);
             }
         } catch (Exception e) {
-            System.err.format("Error copying file: %s\n", e);
+            System.out.format("Error copying file: %s\n", e);
             e.printStackTrace();
         }
-        
     }
 
     // Turns the source path into a path relative to the source directory tree it came from.
     private Path relativize(Path srcPath) {
         for (int i = 1; i < arguments.size(); i++) {
-            Path relPath = fs.getPath(arguments.get(i)).relativize(srcPath);
+            Path relPath = FS.getPath(arguments.get(i)).relativize(srcPath);
             if (relPath.iterator().hasNext()) {
                 return relPath;
             }
@@ -155,34 +202,34 @@ public class MusicFileSync {
                 tag.getFirstField(FieldKey.TITLE)).replaceAll("[^ \\-0-9A-z]", "_"); 
     }
 
-    private static FileSystem fs = FileSystems.getDefault();
+    private static final FileSystem FS = FileSystems.getDefault();
     
     private void fillMap(Side side, Map<String, Path> map, int i, Path datPath) throws IOException {
-        if (Files.exists(datPath)) {
-            System.out.format("Reading from file %s\n", datPath);
-            BufferedReader r = new BufferedReader(new FileReader(datPath.toFile()));
-            while (true) {
-                String line = r.readLine();
-                if (line == null) {
-                    break;
-                }
-                String[] split = line.split("<>");
-                map.put(split[0], fs.getPath(split[1]));
-            }
-            r.close();
-        } else {
-            String dir = arguments.get(i);
-            Path dirPath = fs.getPath(dir);
-            System.out.format("Walking %s\n", dirPath);
-            Files.walkFileTree(dirPath, new MyFileVisitor(side, dirPath, map));
-        }
+        String dir = arguments.get(i);
+        Path dirPath = FS.getPath(dir);
+        System.out.format("Walking %s\n", dirPath);
+        Files.walkFileTree(dirPath, new MyFileVisitor(side, dirPath, map));
     }
 
-    private void writeMap(Map<String, Path> map, Path datPath)
-            throws UnsupportedEncodingException, FileNotFoundException {
-        if (Files.exists(datPath)) {
-            return;
+    private void readMapFromFile(Map<String, Path> map, Path datPath)
+            throws UnsupportedEncodingException, FileNotFoundException, IOException 
+    {
+        System.out.format("Reading from file %s\n", datPath);
+        BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(datPath.toFile()), "UTF-8"));  
+        while (true) {
+            String line = r.readLine();
+            if (line == null) {
+                break;
+            }
+            String[] split = line.split("<>");
+            map.put(split[0], FS.getPath(split[1]));
         }
+        r.close();
+    }
+
+    private void writeMapToFile(Map<String, Path> map, Path datPath)
+            throws UnsupportedEncodingException, FileNotFoundException 
+    {
         PrintStream w = new PrintStream(new FileOutputStream(datPath.toFile()), true, "UTF-8"); 
         for (Entry<String, Path> entry : map.entrySet()) {
             w.format("%s<>%s\n", entry.getKey(), entry.getValue());
@@ -229,18 +276,16 @@ public class MusicFileSync {
                     }
                 }
                 
-                AudioHeader audioHeader = file.getAudioHeader();
-                
-                double trackLength = audioHeader instanceof MP3AudioHeader ? 
-                        ((MP3AudioHeader) audioHeader).getPreciseTrackLength() : audioHeader.getTrackLength();
-//                String key = String.format("%s|%s|%s|%f", tag.getFirst(FieldKey.ALBUM), tag.getFirst(FieldKey.TRACK), tag.getFirst(FieldKey.TITLE), trackLength);
-                String key = String.format("%s|%s|%f", tag.getFirst(FieldKey.ALBUM), tag.getFirst(FieldKey.TRACK), trackLength);
+                String key = String.format("%s|%s|%s|%s", tag.getFirst(FieldKey.ALBUM), tag.getFirst(FieldKey.DISC_NO), tag.getFirst(FieldKey.TRACK), tag.getFirst(FieldKey.TITLE));
                 Path prevPath = map.put(key, path);
                 if (prevPath != null) {
-                    System.err.format("Duplicate for key <%s>:\n  %s\n  %s\n", key, path, prevPath); 
+                    System.out.format("Duplicate for key <%s>:\n  %s\n  %s\n", key, path, prevPath);
+                    if (side == Side.DESTINATION) {
+                        deleteFile(prevPath);
+                    }
                 }
             } catch (Exception e) {
-                System.err.format("Error with file: %s (%s)\n", path, e.getMessage());
+                System.out.format("Error with file: %s (%s)\n", path, e.getMessage());
             }
             return FileVisitResult.CONTINUE;
         }
@@ -248,5 +293,10 @@ public class MusicFileSync {
         public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
             return FileVisitResult.CONTINUE;
         }
+    }
+
+    private static void deleteFile(Path path) {
+//        System.out.format("  Deleting: %s\n", path);
+//        path.toFile().delete();
     }
 }
